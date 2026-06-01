@@ -126,6 +126,55 @@ def _load_recipes(path) -> list[dict[str, Any]]:
     return recipes
 
 
+# --- Equipment inference (deterministic, keyword-based) --------------------
+# The dataset has no equipment field, so we infer likely gear from the recipe's
+# name + description + ingredients via keywords. This is a best-effort guess used
+# ONLY to frame a "do you have this?" question (never an assertion), so being
+# approximate is acceptable. Order = priority; we cap how many we surface.
+_EQUIPMENT_CUES: list[tuple[str, tuple[str, ...]]] = [
+    ("an oven", ("roast", "roasted", "bake", "baked", "baking", "broil", "broiled",
+                 "casserole", "gratin", "braise", "braised")),
+    ("a stovetop", ("simmer", "boil", "boiled", "fried", "fry", "saute", "sauté",
+                    "sear", "seared", "skillet", "saucepan", "poach", "steam",
+                    "steamed", "scramble", "melt")),
+    ("a grill", ("grill", "grilled", "barbecue", "bbq", "char")),
+    ("a slow cooker", ("slow cooker", "crockpot", "crock pot")),
+    ("a blender", ("blend", "blended", "puree", "pureed", "purée", "smoothie")),
+    ("a food processor", ("food processor", "processor", "pulse")),
+    ("a mixer", ("whip", "whipped", "creamed", "batter", "dough", "frosting", "meringue")),
+    ("a microwave", ("microwave",)),
+]
+
+
+def infer_equipment(recipe: dict[str, Any], limit: int = 3) -> list[str]:
+    """Best-effort list of equipment a recipe likely needs (may be empty)."""
+    ingredients = recipe.get("ingredients")
+    if isinstance(ingredients, list):
+        ingredients = " ".join(ingredients)
+    haystack = " ".join(
+        str(recipe.get(k) or "") for k in ("name", "description")
+    ).lower() + " " + str(ingredients or "").lower()
+    found: list[str] = []
+    for label, cues in _EQUIPMENT_CUES:
+        if any(cue in haystack for cue in cues):
+            found.append(label)
+    return found[:limit]
+
+
+def _owned_has(owned_lower: set[str], item: str) -> bool:
+    """Loose match: 'a stovetop' satisfied by 'stove'; 'a mixer' by 'stand mixer'."""
+    words = [w for w in re.findall(r"[a-z]+", item.lower()) if w not in {"a", "an"}]
+    return any(any(w in o or o in w for o in owned_lower) for w in words if len(w) > 2)
+
+
+def unmet_equipment(needs: list[str], owned: list[str]) -> list[str]:
+    """Which inferred items the user does NOT appear to own (all, if none known)."""
+    if not owned:
+        return list(needs)
+    owned_lower = {o.lower() for o in owned}
+    return [n for n in needs if not _owned_has(owned_lower, n)]
+
+
 @lru_cache(maxsize=1)
 def get_index() -> RecipeIndex:
     recipes = _load_recipes(RECIPES_PATH)
