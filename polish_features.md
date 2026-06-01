@@ -44,25 +44,38 @@ silent — exactly the intended safety-net behavior.
 
 ---
 
-## P2 — Cut per-turn cost & latency (Priya: <2s + unit economics)
+## P2 — Cut per-turn cost & latency (Priya: <2s + unit economics) — ✅ IMPLEMENTED
 
 **Brief:** Priya wants <2s and low per-query cost; Marcus accepts slower for better.
-Today **every turn makes 3 LLM calls**: a router classifier (before the answer), the
-answer, and a memory extractor (after). The router sits in front of the response on
-*every* turn, and the extractor runs even on "thanks."
+Every turn used to make **3 LLM calls**: a router classifier (before the answer),
+the answer, and a memory extractor (after). The router sat in front of the response
+on *every* turn, and the extractor ran even on "thanks."
 
-**Proposed approach:**
-- **Gate the extractor:** skip it unless the user's message plausibly contains a
-  durable preference/equipment mention (cheap keyword/heuristic pre-check, or only
-  run every N turns). Removes a call from most turns.
-- **Heuristic-first routing:** classify obvious cases (very short message, greeting,
-  no question mark) with a zero-cost heuristic and only fall back to the Haiku
-  classifier when ambiguous. Removes the pre-answer call from most simple turns.
-- **Measure:** add per-turn token/cost logging so the economics are observable
-  (supports Priya's "keep an eye on per-query cost").
+**Implemented (safe-by-construction — uncertain cases keep today's behavior):**
+- **Heuristic-first routing** (`route_model` in `agent.py`): a zero-cost regex
+  resolves the obvious cases — trivial greetings/acks → fast model; clear
+  cooking/recipe intent → smart model — and **only ambiguous turns fall back to the
+  classifier LLM call**. Erring toward the smart model on cooking turns means a
+  mis-heuristic can raise cost slightly but never lowers answer quality.
+- **Gated extractor** (`should_extract` in `agent.py`): the post-turn extractor only
+  runs when the user's latest message carries a durable-preference signal
+  (likes/dislikes, diet, allergies, possession/identity, equipment, taste words).
+  The pattern is intentionally generous so a stated preference is never dropped;
+  signal-free turns (greetings, recipe mechanics, acknowledgements) skip the call.
+- **Measurement:** `logger.debug` lines record each routing/extraction decision
+  (silent by default; flip the `pantrypal` logger to DEBUG to observe).
 
-**Effort:** ~S–M, localized to `agent.py`/`main.py`.
-**Risk:** heuristics can mis-route; keep the LLM fallback for ambiguity.
+**Files:** `backend/app/agent.py` (`route_model`, `_TRIVIAL_RE`, `_COMPLEX_RE`,
+`should_extract`, `_PREF_SIGNAL_RE`; `prepare`/`extract_and_save` wired to use them).
+
+**Verified (live, no regressions):** greetings route to Haiku and skip both extra
+calls; recipe turns route to Sonnet with tools + disclaimer; a stated preference
+("I love Thai, I'm vegetarian") is still captured (likes Thai, avoid meat); food
+safety still deferred; off-topic still redirected. All scenarios error-free.
+
+**Effort:** ~S–M, localized to `agent.py`.
+**Risk:** low — heuristics only short-circuit obvious cases; everything else keeps
+the existing classifier/extractor path.
 
 ---
 
@@ -172,5 +185,5 @@ with the legal work already done; raises robustness against adversarial extracti
 1. ~~**P1 equipment-check enforcement**~~ — ✅ done (closed the stated-requirement gap).
 2. ~~**P2 AI-tells**~~ — ✅ done (source-level suppression, streaming preserved).
 3. ~~**P3 equipment onboarding**~~ — ✅ done (seeds the equipment check on turn one).
-4. **P2 cost/latency** — directly serves Priya's economics ask, low effort. (remaining)
+4. ~~**P2 cost/latency**~~ — ✅ done (heuristic routing + gated extractor).
 5. **P3** favorites → retrieval → compliance classifier, as time allows. (remaining)
