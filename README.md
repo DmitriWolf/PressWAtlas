@@ -10,7 +10,7 @@ See [SCOPING.md](SCOPING.md) for what we committed to and why, and [TRADEOFFS.md
 
 ---
 
-https://github.com/user-attachments/assets/157cccce-5037-41d6-b70b-74e7aff28701
+https://github.com/user-attachments/assets/fb880f41-209f-4a4e-895e-d819e98a5873
 
 ---
 
