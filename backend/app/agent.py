@@ -6,15 +6,18 @@ to call tools; we never hardcode a tool sequence.
 
 Flow per request (orchestrated from main.py):
   1. load_memory      -> read equipment + prefs from SQLite, set equipment ctx
-  2. route            -> cheap classifier picks fast vs smart model
+  2. route            -> heuristic picks fast/smart model; classifier only if ambiguous
   3. agent <-> tools  -> LLM-driven loop until the model answers
-  4. extract_and_save -> pull durable prefs/equipment (never health) into memory
+  4. extract_and_save -> pull durable prefs/equipment (never health), gated by signal
 """
 from __future__ import annotations
 
+import logging
 import re
 from functools import lru_cache
 from typing import Annotated, TypedDict
+
+logger = logging.getLogger("pantrypal")
 
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import (
@@ -87,8 +90,33 @@ def build_graph():
 
 
 # --- Routing ---------------------------------------------------------------
+# Cost/latency optimization (polish P2): a zero-cost heuristic resolves the
+# OBVIOUS cases so we skip the classifier LLM call on most turns. Anything that
+# isn't obviously trivial or obviously cooking-related still falls back to the
+# classifier — so this can never route a genuinely hard turn to the weak model.
+
+# Trivial turns (greetings / acknowledgements) -> fast model, no classifier call.
+_TRIVIAL_RE = re.compile(
+    r"^(hi|hey|hello|yo|sup|hiya|thanks( so much| a lot)?|thank you|thx|ty|ok(ay)?|k|"
+    r"cool|nice|great|awesome|sure|yes|yep|yeah|yup|no|nope|got it|cheers|"
+    r"good (morning|afternoon|evening|night)|how are you|what'?s up|whats up)[\s!.?]*$",
+    re.I,
+)
+# Clear cooking/recipe intent -> smart model, no classifier call. (Erring toward
+# the smart model is safe: worst case is slightly higher cost, never worse quality.)
+_COMPLEX_RE = re.compile(
+    r"\b(recipe|recipes|cook|cooking|make|made|meal|dinner|lunch|breakfast|brunch|snack|"
+    r"dish|eat|ingredient|ingredients|substitut|instead of|suggest|recommend|idea|ideas|"
+    r"whip up|fast|quick|easy|spicy|sweet|savou?ry|dessert|bake|baking|roast|grill|fry|"
+    r"saute|sauté|simmer|boil|vegetarian|vegan|keto|paleo|gluten|dairy|allerg|pair|wine|"
+    r"host|hosting|serve|servings|feed|hungry|leftover|marinade|sauce|appetizer|entree|"
+    r"for (two|three|four|five|six|\d))\b",
+    re.I,
+)
+
+
 def classify_turn(user_text: str) -> str:
-    """One cheap call -> 'simple' or 'complex'. Defaults to smart model on error."""
+    """One cheap LLM call -> 'simple' or 'complex'. Defaults to smart on error."""
     try:
         resp = _llm(config.ROUTER_MODEL).invoke(
             [SystemMessage(content=ROUTER_PROMPT), HumanMessage(content=user_text)]
@@ -97,6 +125,27 @@ def classify_turn(user_text: str) -> str:
         return config.FAST_MODEL if verdict.startswith("simple") else config.SMART_MODEL
     except Exception:
         return config.SMART_MODEL
+
+
+def route_model(user_text: str) -> str:
+    """Pick the model: heuristic for obvious cases, classifier for the rest.
+
+    Cooking signal is checked BEFORE the trivial-greeting check on purpose: it's the
+    quality-preserving branch, so even if `_TRIVIAL_RE` is later broadened to match
+    compound messages, anything with a cooking keyword still routes to the smart
+    model rather than being short-circuited to fast.
+    """
+    t = (user_text or "").strip()
+    if not t:
+        return config.SMART_MODEL
+    if _COMPLEX_RE.search(t):
+        logger.debug("route: heuristic cooking -> smart (no classifier call)")
+        return config.SMART_MODEL
+    if _TRIVIAL_RE.match(t):
+        logger.debug("route: heuristic trivial -> fast (no classifier call)")
+        return config.FAST_MODEL
+    logger.debug("route: ambiguous -> classifier")
+    return classify_turn(t)
 
 
 # --- Request preparation ---------------------------------------------------
@@ -115,7 +164,7 @@ def prepare(user_id: str, history: list[dict]) -> tuple[list[BaseMessage], str]:
         elif role == "assistant":
             messages.append(AIMessage(content=content))
 
-    model_choice = classify_turn(last_user) if last_user else config.SMART_MODEL
+    model_choice = route_model(last_user) if last_user else config.SMART_MODEL
     return messages, model_choice
 
 
@@ -204,12 +253,41 @@ def turn_suggested_food(messages: list[BaseMessage]) -> bool:
 
 
 # --- Memory extraction (post-turn) -----------------------------------------
+# Cost optimization (polish P2): only run the extractor LLM call when the user's
+# latest message actually contains a durable-preference signal. The pattern is
+# intentionally generous (likes/dislikes, diet, allergies, possession/identity,
+# equipment, taste words) so we never silently drop a stated preference; turns
+# with no signal at all (greetings, recipe mechanics, acknowledgements) skip it.
+_PREF_SIGNAL_RE = re.compile(
+    r"\b(i (like|love|hate|prefer|enjoy|avoid|usually|always|never|own|have|got|bought|"
+    r"don'?t|do not|can'?t|cannot|am|'?m)|i'?m|my |we (have|own|love|prefer)|"
+    r"vegetarian|vegan|pescatarian|pescetarian|keto|paleo|gluten|dairy|lactose|kosher|"
+    r"halal|allerg|intoleran|favou?rite|obsessed|not a fan|"
+    r"oven|stove|stovetop|microwave|air ?fryer|blender|food processor|mixer|slow cooker|"
+    r"crock\s?pot|instant pot|pressure cooker|toaster oven|griddle|skillet|cast iron|wok|"
+    r"rice cooker|sous vide|hot plate|saucepan|"
+    r"spicy|sweet|savou?ry|mild|bland|salty|sour)\b",
+    re.I,
+)
+
+
+def should_extract(transcript: list[dict]) -> bool:
+    """True if the latest user message plausibly states something worth remembering."""
+    last_user = next(
+        (m.get("content", "") for m in reversed(transcript) if m.get("role") == "user"), ""
+    )
+    return bool(_PREF_SIGNAL_RE.search(last_user or ""))
+
+
 def extract_and_save(user_id: str, transcript: list[dict]) -> None:
     """Pull durable preferences/equipment from the turn and persist them.
 
     Health conditions are excluded by the extraction prompt. Failures here must
     never break the chat response, so everything is wrapped defensively.
     """
+    if not should_extract(transcript):
+        logger.debug("extract: no preference signal -> skipping extractor call")
+        return
     try:
         convo = "\n".join(f"{m['role']}: {m['content']}" for m in transcript if m.get("content"))
         resp = _llm(config.FAST_MODEL).invoke(
