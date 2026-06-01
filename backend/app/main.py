@@ -97,6 +97,7 @@ async def chat(req: ChatRequest):
         search_results: list[dict] = []
         final_text_parts: list[str] = []
         announced: set[str] = set()
+        last_msg_id = None  # to separate consecutive agent messages (pre/post tool)
         yield _sse("model", model=model_choice)
         # Always-visible standing disclosure (consistency = compliance).
         yield _sse("notice", text=STANDING_NOTICE)
@@ -110,6 +111,13 @@ async def chat(req: ChatRequest):
                     if meta.get("langgraph_node") == "agent":
                         text = _chunk_text(msg.content)
                         if text:
+                            msg_id = getattr(msg, "id", None)
+                            # New agent message after a tool call: separate it from
+                            # the prior segment so they don't run together ("…!Here's").
+                            if final_text_parts and msg_id != last_msg_id:
+                                final_text_parts.append("\n\n")
+                                yield _sse("token", text="\n\n")
+                            last_msg_id = msg_id
                             final_text_parts.append(text)
                             yield _sse("token", text=text)
                 elif mode == "updates":
@@ -156,6 +164,23 @@ async def chat(req: ChatRequest):
         await asyncio.to_thread(extract_and_save, req.user_id, transcript)
 
     return StreamingResponse(stream(), media_type="text/event-stream")
+
+
+class EquipmentBody(BaseModel):
+    equipment: list[str] = Field(default_factory=list)
+
+
+@app.get("/api/equipment/{user_id}")
+def get_equipment(user_id: str):
+    """Equipment we have stored for a user (drives the onboarding checklist)."""
+    return {"equipment": memory.get_memory(user_id).get("equipment") or []}
+
+
+@app.put("/api/equipment/{user_id}")
+def put_equipment(user_id: str, body: EquipmentBody):
+    """Replace the user's equipment list (from the onboarding/edit checklist)."""
+    mem = memory.set_equipment(user_id, body.equipment)
+    return {"equipment": mem["equipment"]}
 
 
 @app.get("/api/memory/{user_id}")

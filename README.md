@@ -93,10 +93,12 @@ curl -N http://localhost:8000/api/chat \
   }'
 ```
 
-Streams `data:` events of type `model`, `tool`, `token`, `disclaimer`, `done`, `error`.
+Streams `data:` events of type `model`, `notice`, `tool`, `token`, `disclaimer`, `done`, `error`.
 Send the full `messages` array each turn to preserve conversation context; cross-session
 preferences are recalled automatically from `user_id`.
 
+### `GET /api/equipment/{user_id}` — list a user's stored kitchen equipment
+### `PUT /api/equipment/{user_id}` — set equipment (used by the onboarding checklist); body `{"equipment": ["Oven", "Air fryer"]}`
 ### `GET /api/memory/{user_id}` — inspect stored memory
 ### `DELETE /api/memory/{user_id}` — right-to-delete (wipe everything for a user)
 ### `GET /api/health` — status + which keys/models are configured

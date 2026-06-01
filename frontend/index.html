@@ -18,7 +18,10 @@
           <p class="tagline">the friend who actually cooks</p>
         </div>
       </div>
-      <button id="reset" class="reset" title="Forget everything about me (clears stored memory)">Reset memory</button>
+      <div class="topbar-actions">
+        <button id="kitchen" class="reset" title="Tell PantryPal what's in your kitchen">🍳 My Kitchen</button>
+        <button id="reset" class="reset" title="Forget everything about me (clears stored memory)">Reset Memory</button>
+      </div>
     </header>
 
     <main id="chat" class="chat">
@@ -33,6 +36,24 @@
       <p class="finehint">⚠️ Always verify allergens and ingredient safety yourself. PantryPal offers cooking help only — not medical, dietary, or food-safety advice. Intended for users aged 13+.</p>
     </footer>
   </div>
+
+  <!-- Equipment onboarding / edit modal -->
+  <div id="kitchen-modal" class="modal-overlay" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="kitchen-title">
+      <h2 id="kitchen-title">What's in your kitchen?</h2>
+      <p class="modal-sub">Tap everything you've got. PantryPal only suggests things you can actually make — so the more it knows, the better. You can change this anytime.</p>
+      <div id="equipment-grid" class="equipment-grid"><!-- chips injected --></div>
+      <form id="custom-form" class="custom-add">
+        <input id="custom-item" type="text" placeholder="Add something else (e.g. tagine, pizza oven)…" autocomplete="off" />
+        <button type="submit" title="Add">＋</button>
+      </form>
+      <div class="modal-actions">
+        <button id="kitchen-skip" class="reset" type="button">Skip for now</button>
+        <button id="kitchen-save" class="primary" type="button">Save kitchen</button>
+      </div>
+    </div>
+  </div>
+
   <script src="/app.js"></script>
 </body>
 </html>

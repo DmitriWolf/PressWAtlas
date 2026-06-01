@@ -172,6 +172,103 @@ input.addEventListener("keydown", (e) => {
 resetBtn.addEventListener("click", async () => {
   if (!confirm("Forget everything PantryPal remembers about you?")) return;
   await fetch(`/api/memory/${userId}`, { method: "DELETE" });
+  localStorage.removeItem("pantrypal_onboarded");
   history.length = 0;
   showWelcome();
+  openKitchen(); // fresh start → re-onboard
 });
+
+// ---------------- Equipment onboarding ----------------
+const COMMON_EQUIPMENT = [
+  "Oven", "Stovetop", "Microwave", "Air fryer", "Blender", "Food processor",
+  "Stand mixer", "Hand mixer", "Slow cooker", "Instant Pot", "Toaster oven",
+  "Grill", "Cast iron skillet", "Nonstick pan", "Large pot", "Saucepan",
+  "Baking sheet", "Baking dish", "Whisk", "Chef's knife", "Cutting board",
+  "Mixing bowls", "Wok", "Rice cooker", "Sous vide", "Hot plate",
+];
+
+const modal = document.getElementById("kitchen-modal");
+const grid = document.getElementById("equipment-grid");
+const customForm = document.getElementById("custom-form");
+const customInput = document.getElementById("custom-item");
+const selected = new Set(); // lowercased keys
+
+function chipKey(s) { return s.trim().toLowerCase(); }
+
+function renderEquipment() {
+  // union of the common list + anything already selected that isn't in it
+  const labels = [...COMMON_EQUIPMENT];
+  for (const key of selected) {
+    if (!labels.some((l) => chipKey(l) === key)) {
+      labels.push(key.replace(/\b\w/g, (c) => c.toUpperCase()));
+    }
+  }
+  grid.innerHTML = "";
+  labels.forEach((label) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "equip" + (selected.has(chipKey(label)) ? " on" : "");
+    btn.textContent = label;
+    btn.addEventListener("click", () => {
+      const k = chipKey(label);
+      selected.has(k) ? selected.delete(k) : selected.add(k);
+      btn.classList.toggle("on");
+    });
+    grid.appendChild(btn);
+  });
+}
+
+async function openKitchen() {
+  selected.clear();
+  try {
+    const res = await fetch(`/api/equipment/${userId}`);
+    const data = await res.json();
+    (data.equipment || []).forEach((e) => selected.add(chipKey(e)));
+  } catch (_) { /* offline: start empty */ }
+  renderEquipment();
+  modal.hidden = false;
+}
+
+function closeKitchen() { modal.hidden = true; }
+
+async function saveKitchen() {
+  // Preserve original casing where we can (common list), else title-case.
+  const labelFor = (key) =>
+    COMMON_EQUIPMENT.find((l) => chipKey(l) === key) ||
+    key.replace(/\b\w/g, (c) => c.toUpperCase());
+  const equipment = [...selected].map(labelFor);
+  try {
+    await fetch(`/api/equipment/${userId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ equipment }),
+    });
+  } catch (_) { /* best-effort */ }
+  localStorage.setItem("pantrypal_onboarded", "1");
+  closeKitchen();
+}
+
+customForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const val = customInput.value.trim();
+  if (val) { selected.add(chipKey(val)); customInput.value = ""; renderEquipment(); }
+});
+
+document.getElementById("kitchen").addEventListener("click", openKitchen);
+document.getElementById("kitchen-save").addEventListener("click", saveKitchen);
+document.getElementById("kitchen-skip").addEventListener("click", () => {
+  localStorage.setItem("pantrypal_onboarded", "1");
+  closeKitchen();
+});
+modal.addEventListener("click", (e) => { if (e.target === modal) closeKitchen(); });
+
+// First-run: if we've never onboarded and have no stored equipment, prompt.
+(async function maybeOnboard() {
+  if (localStorage.getItem("pantrypal_onboarded")) return;
+  try {
+    const res = await fetch(`/api/equipment/${userId}`);
+    const data = await res.json();
+    if (!(data.equipment || []).length) openKitchen();
+    else localStorage.setItem("pantrypal_onboarded", "1");
+  } catch (_) { /* offline: skip */ }
+})();

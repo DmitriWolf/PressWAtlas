@@ -116,14 +116,28 @@ preserve the "runs locally" guarantee.
 
 ---
 
-## P3 — Structured equipment onboarding (Jordan: #1 churn driver)
+## P3 — Structured equipment onboarding (Jordan: #1 churn driver) — ✅ IMPLEMENTED
 
-**Brief:** cookware mismatch is the top churn cause. Today equipment is learned only
-when incidentally mentioned, so `check_can_make` often has no ground truth.
+**Brief:** cookware mismatch is the top churn cause. Equipment used to be learned
+only when incidentally mentioned, so `check_can_make` often had no ground truth on
+turn one.
 
-**Proposed approach:** a lightweight first-run checklist ("tap what you've got:
-oven, stovetop, microwave, air fryer, blender…") that seeds the equipment list,
-editable any time. Gives the equipment check real data from turn one.
+**Implemented:** a first-run checklist modal ("What's in your kitchen?") of ~26
+common items (oven, stovetop, air fryer, Instant Pot, sous vide, hot plate…) as
+toggle chips, plus a free-text add for anything unusual. It auto-opens on first
+visit when no equipment is stored, and a "🍳 My Kitchen" button in the header
+reopens it to edit anytime (pre-checked from stored state). Saving seeds the
+equipment list, so `check_can_make` and the P1 backstop have real data immediately.
+
+- **Backend:** `GET/PUT /api/equipment/{user_id}` and `memory.set_equipment()`,
+  which replaces the equipment list **without** touching food preferences (verified:
+  likes/avoidances survive an equipment update).
+- **Frontend:** modal + chips in `index.html`/`styles.css`/`app.js`; first-run
+  detection via a stored equipment check + `localStorage` flag; "Reset memory" also
+  re-triggers onboarding.
+
+**Verified:** endpoints round-trip; onboarded equipment is immediately visible to
+the agent (tested: stored a blender → "you've got a blender, you're good to go").
 
 **Effort:** ~S–M (UI + existing memory store). **Risk:** low.
 

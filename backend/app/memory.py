@@ -113,6 +113,36 @@ def update_memory(
     return {"equipment": equipment, "preferences": prefs}
 
 
+def set_equipment(user_id: str, items: list[str]) -> dict[str, Any]:
+    """Replace a user's equipment list wholesale (used by the onboarding checklist).
+
+    Preferences are left untouched. Deduped, order-preserving.
+    """
+    current = get_memory(user_id)
+    prefs = current["preferences"]
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        item = (item or "").strip()
+        if item and item.lower() not in seen:
+            cleaned.append(item)
+            seen.add(item.lower())
+    with _lock:
+        conn = _connect()
+        conn.execute(
+            """
+            INSERT INTO user_memory (user_id, equipment, preferences, updated_at)
+            VALUES (?, ?, ?, datetime('now'))
+            ON CONFLICT(user_id) DO UPDATE SET
+                equipment=excluded.equipment,
+                updated_at=excluded.updated_at
+            """,
+            (user_id, json.dumps(cleaned), json.dumps(prefs)),
+        )
+        conn.commit()
+    return {"equipment": cleaned, "preferences": prefs}
+
+
 def clear_user(user_id: str) -> None:
     """Right-to-delete: wipe everything we hold for a user."""
     with _lock:
