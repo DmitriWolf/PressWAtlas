@@ -32,11 +32,16 @@ from .prompts import (
     MEMORY_EXTRACTION_PROMPT,
     ROUTER_PROMPT,
     build_system_prompt,
+    drop_health_terms,
     safe_parse_memory,
 )
 from .tools import ALL_TOOLS, current_equipment
 
 RECIPE_TOOLS = {"search_recipes", "check_can_make"}
+# Diane requires the allergen notice on any response suggesting a recipe OR an
+# ingredient. Substitution/"what can I use instead" answers go through web_search,
+# so it must trigger the notice too — not just the recipe tools.
+SUGGESTION_TOOLS = {"search_recipes", "check_can_make", "web_search"}
 
 
 class State(TypedDict):
@@ -112,13 +117,13 @@ def prepare(user_id: str, history: list[dict]) -> tuple[list[BaseMessage], str]:
     return messages, model_choice
 
 
-def turn_used_recipe_tool(messages: list[BaseMessage]) -> bool:
+def turn_suggested_food(messages: list[BaseMessage]) -> bool:
     """Deterministic disclaimer trigger: did this turn surface a recipe/ingredient?"""
     for m in messages:
-        if isinstance(m, ToolMessage) and getattr(m, "name", None) in RECIPE_TOOLS:
+        if isinstance(m, ToolMessage) and getattr(m, "name", None) in SUGGESTION_TOOLS:
             return True
         if isinstance(m, AIMessage) and m.tool_calls:
-            if any(tc.get("name") in RECIPE_TOOLS for tc in m.tool_calls):
+            if any(tc.get("name") in SUGGESTION_TOOLS for tc in m.tool_calls):
                 return True
     return False
 
@@ -136,6 +141,10 @@ def extract_and_save(user_id: str, transcript: list[dict]) -> None:
             [SystemMessage(content=MEMORY_EXTRACTION_PROMPT), HumanMessage(content=convo)]
         )
         facts = safe_parse_memory(resp.content or "")
+        # Deterministic backstop: strip anything resembling a medical condition
+        # before it can be persisted, regardless of what the extractor returned.
+        for key in ("equipment_add", "likes", "dislikes", "avoid"):
+            facts[key] = drop_health_terms(facts[key])
         if any(facts.values()):
             memory.update_memory(
                 user_id,

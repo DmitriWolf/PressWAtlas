@@ -18,6 +18,37 @@ ALLERGEN_DISCLAIMER = (
     "verify anything you're allergic to yourself before cooking or eating."
 )
 
+# An always-present notice emitted on EVERY response. Diane's concern was
+# inconsistency, so the strongest compliance posture is a standing disclosure
+# that is visible regardless of content; the inline ALLERGEN_DISCLAIMER above is
+# additional, contextual reinforcement when a recipe/ingredient is suggested.
+STANDING_NOTICE = (
+    "PantryPal offers cooking help only — not medical, dietary, or food-safety "
+    "advice. Always verify allergens and ingredient safety yourself. Intended for "
+    "users aged 13 and over."
+)
+
+# Deterministic backstop for memory storage. These are medical/health CONDITION
+# terms that must never be persisted, even if the extractor model slips. Food
+# avoidances ("shellfish", "gluten-free", "vegetarian") are preferences, NOT
+# medical data, and are intentionally absent here so they are still remembered.
+HEALTH_DENYLIST = (
+    "diabet", "pregnan", "hypertens", "blood pressure", "cholesterol", "celiac",
+    "crohn", "colitis", "ibs", "gerd", "cancer", "chemo", "kidney", "renal",
+    "heart disease", "gout", "thyroid", "anemia", "anaemia", "medication",
+    "insulin", "prescription", "diagnos", "disorder", "syndrome",
+)
+
+
+def contains_health_term(text: str) -> bool:
+    t = (text or "").lower()
+    return any(term in t for term in HEALTH_DENYLIST)
+
+
+def drop_health_terms(items: list[str]) -> list[str]:
+    """Filter out anything that looks like a medical condition before storage."""
+    return [i for i in items if not contains_health_term(i)]
+
 
 SYSTEM_PROMPT = """You are PantryPal — the friend who actually cooks. Someone's \
 standing in their kitchen at 6pm, tired, no idea what to make. You're who they text.
@@ -63,6 +94,10 @@ to honor — that's different from medical advice.
 authorities (USDA / local food safety guidance) and, when relevant, the general \
 "when in doubt, throw it out" rule. This one matters even though it feels paternal.
 4. Never give the impression you've verified allergen safety for them.
+5. CHILDREN: PantryPal is intended for users aged 13 and over and is not directed
+   at children. If a user indicates they are under 13, gently say PantryPal isn't
+   meant for kids and suggest they cook with a parent or guardian; do not collect
+   or store personal details from them.
 
 # Memory
 Relevant things you remember about this user are provided below. Use them naturally — \

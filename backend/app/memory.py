@@ -119,3 +119,20 @@ def clear_user(user_id: str) -> None:
         conn = _connect()
         conn.execute("DELETE FROM user_memory WHERE user_id = ?", (user_id,))
         conn.commit()
+
+
+def purge_stale(retention_days: int) -> int:
+    """Retention policy: delete memory not updated within the retention window.
+
+    Stored preferences are food-related, but Diane asked for a retention story;
+    this enforces a hard TTL. Returns the number of users purged.
+    """
+    with _lock:
+        conn = _connect()
+        cur = conn.execute(
+            "DELETE FROM user_memory WHERE updated_at IS NOT NULL "
+            "AND updated_at < datetime('now', ?)",
+            (f"-{int(retention_days)} days",),
+        )
+        conn.commit()
+        return cur.rowcount
