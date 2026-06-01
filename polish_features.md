@@ -66,19 +66,34 @@ answer, and a memory extractor (after). The router sits in front of the response
 
 ---
 
-## P2 — Suppress "AI tells" in the stream (Marcus)
+## P2 — Suppress "AI tells" in the stream (Marcus) — ✅ IMPLEMENTED
 
-**Brief:** Marcus — *"no weird AI tells."* The stream sometimes surfaces the
-model's pre-tool preamble ("Let me search for something good!") before the real
-answer.
+**Brief:** Marcus — *"no weird AI tells."* The stream surfaced the model's pre-tool
+preamble ("Let me search for something good!") before the real answer.
 
-**Proposed approach:** only stream tokens from the **final** agent turn (the one
-with no tool calls), buffering/suppressing text emitted on intermediate
-tool-calling turns. Keep the separate `tool` status events for "searching…" UX so
-the user still sees progress.
+**Implemented (source-level, not buffering):** rather than buffer/suppress at the
+stream layer — which would have killed live token streaming for the final answer
+(the one constraint this item flagged: *"must ensure the final answer still streams
+incrementally"*) — a firm system-prompt rule stops the model from generating the
+narration at all: *"Never narrate your tool use… your first words should be the
+actual answer."* The live "🔎 searching…" `tool` status events already provide
+progress feedback, so the narration was pure filler.
 
-**Effort:** ~S, in the `main.py` streaming loop.
-**Risk:** low; must ensure the final answer still streams incrementally.
+**Why not buffering:** preamble text and the tool call live in the *same* agent
+message, and the text streams before the tool call is known — so suppressing it at
+the stream layer requires buffering the whole message, which also defers the final
+answer (no incremental streaming). The prompt approach removes the preamble *and*
+keeps the answer streaming token-by-token. The earlier segment-separator fix in
+`main.py` remains as a safety net for any residual multi-segment output.
+
+**Files:** `backend/app/prompts.py` (SYSTEM_PROMPT tools section).
+
+**Verified:** across recipe-search, hosting, and web-search (substitution) turns,
+answers now open directly with content (no "Let me…" preamble) and still arrive as
+multiple streamed token events (7–12 per turn) — streaming preserved.
+
+**Effort:** ~S. **Risk:** low; relies on instruction-following (highly reliable for
+this formatting rule), with the separator fix as backup.
 
 ---
 
@@ -155,6 +170,7 @@ with the legal work already done; raises robustness against adversarial extracti
 ## Suggested order
 
 1. ~~**P1 equipment-check enforcement**~~ — ✅ done (closed the stated-requirement gap).
-2. **P2 cost/latency** — directly serves Priya's economics ask, low effort.
-3. **P2 AI-tells** — quick, visible polish.
-4. **P3** favorites → onboarding → retrieval → compliance classifier, as time allows.
+2. ~~**P2 AI-tells**~~ — ✅ done (source-level suppression, streaming preserved).
+3. ~~**P3 equipment onboarding**~~ — ✅ done (seeds the equipment check on turn one).
+4. **P2 cost/latency** — directly serves Priya's economics ask, low effort. (remaining)
+5. **P3** favorites → retrieval → compliance classifier, as time allows. (remaining)
