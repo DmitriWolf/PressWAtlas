@@ -1,0 +1,142 @@
+"""FastAPI app: streaming chat endpoint + memory endpoints + static UI.
+
+The whole product runs as one local process: this serves the JSON/SSE API and
+the static chat frontend, so `docker compose up` (or uvicorn) is all you need.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+
+from dotenv import load_dotenv
+
+load_dotenv()  # pull .env before app modules read config
+
+from fastapi import FastAPI  # noqa: E402
+from fastapi.responses import FileResponse, StreamingResponse  # noqa: E402
+from fastapi.staticfiles import StaticFiles  # noqa: E402
+from pydantic import BaseModel, Field  # noqa: E402
+
+from . import config, memory  # noqa: E402
+from .agent import (  # noqa: E402
+    RECIPE_TOOLS,
+    build_graph,
+    extract_and_save,
+    prepare,
+)
+from .prompts import ALLERGEN_DISCLAIMER  # noqa: E402
+
+app = FastAPI(title="PantryPal", version="1.0")
+
+TOOL_LABELS = {
+    "search_recipes": "🔎 searching the recipe library…",
+    "check_can_make": "🧰 checking your equipment…",
+    "web_search": "🌐 searching the web…",
+}
+
+
+class Message(BaseModel):
+    role: str
+    content: str
+
+
+class ChatRequest(BaseModel):
+    user_id: str = Field(default="anon", description="Stable id for cross-session memory")
+    messages: list[Message] = Field(default_factory=list)
+
+
+def _sse(event: str, **data) -> str:
+    return f"data: {json.dumps({'type': event, **data})}\n\n"
+
+
+def _chunk_text(content) -> str:
+    """Anthropic chunks may be str or a list of content blocks; extract text."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text"
+        )
+    return ""
+
+
+@app.post("/api/chat")
+async def chat(req: ChatRequest):
+    history = [m.model_dump() for m in req.messages]
+    messages, model_choice = prepare(req.user_id, history)
+    graph = build_graph()
+
+    async def stream():
+        recipe_used = False
+        final_text_parts: list[str] = []
+        announced: set[str] = set()
+        yield _sse("model", model=model_choice)
+        try:
+            async for mode, payload in graph.astream(
+                {"messages": messages, "model_choice": model_choice},
+                stream_mode=["updates", "messages"],
+            ):
+                if mode == "messages":
+                    msg, meta = payload
+                    if meta.get("langgraph_node") == "agent":
+                        text = _chunk_text(msg.content)
+                        if text:
+                            final_text_parts.append(text)
+                            yield _sse("token", text=text)
+                elif mode == "updates":
+                    for node, update in payload.items():
+                        for m in update.get("messages", []):
+                            for tc in getattr(m, "tool_calls", None) or []:
+                                name = tc.get("name")
+                                if name in RECIPE_TOOLS:
+                                    recipe_used = True
+                                if name and name not in announced:
+                                    announced.add(name)
+                                    yield _sse("tool", label=TOOL_LABELS.get(name, f"using {name}…"))
+        except Exception as e:  # never leave the client hanging
+            yield _sse("error", message=f"Something went wrong: {e}")
+            return
+
+        # Deterministic, consistent allergen notice (Diane's non-negotiable).
+        if recipe_used:
+            yield _sse("disclaimer", text=ALLERGEN_DISCLAIMER)
+        yield _sse("done")
+
+        # Persist durable preferences/equipment off the response path.
+        answer = "".join(final_text_parts)
+        transcript = history + ([{"role": "assistant", "content": answer}] if answer else [])
+        await asyncio.to_thread(extract_and_save, req.user_id, transcript)
+
+    return StreamingResponse(stream(), media_type="text/event-stream")
+
+
+@app.get("/api/memory/{user_id}")
+def get_memory(user_id: str):
+    return memory.get_memory(user_id)
+
+
+@app.delete("/api/memory/{user_id}")
+def delete_memory(user_id: str):
+    """Right-to-delete: wipe everything stored for a user."""
+    memory.clear_user(user_id)
+    return {"ok": True, "user_id": user_id}
+
+
+@app.get("/api/health")
+def health():
+    return {
+        "ok": True,
+        "anthropic_key": bool(config.ANTHROPIC_API_KEY),
+        "tavily_key": bool(config.TAVILY_API_KEY),
+        "fast_model": config.FAST_MODEL,
+        "smart_model": config.SMART_MODEL,
+    }
+
+
+# --- Static chat UI (mounted last so /api/* wins) --------------------------
+if config.FRONTEND_DIR.exists():
+    @app.get("/")
+    def index():
+        return FileResponse(config.FRONTEND_DIR / "index.html")
+
+    app.mount("/", StaticFiles(directory=config.FRONTEND_DIR), name="static")

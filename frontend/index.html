@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PantryPal — the friend who actually cooks</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">🍳</span>
+        <div>
+          <h1>PantryPal</h1>
+          <p class="tagline">the friend who actually cooks</p>
+        </div>
+      </div>
+      <button id="reset" class="reset" title="Forget everything about me (clears stored memory)">Reset memory</button>
+    </header>
+
+    <main id="chat" class="chat">
+      <!-- messages injected here -->
+    </main>
+
+    <footer class="composer">
+      <form id="form">
+        <textarea id="input" rows="1" placeholder="What are you trying to cook tonight?" autocomplete="off"></textarea>
+        <button id="send" type="submit" aria-label="Send">➤</button>
+      </form>
+      <p class="finehint">PantryPal has opinions about food — not about your health. Always verify allergens yourself.</p>
+    </footer>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>

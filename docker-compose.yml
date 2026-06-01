@@ -1,0 +1,17 @@
+services:
+  pantrypal:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: pantrypal:latest
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      # Persist per-user memory across container restarts.
+      - pantrypal_data:/data
+    restart: unless-stopped
+
+volumes:
+  pantrypal_data:

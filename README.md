@@ -1,99 +1,133 @@
-# Applied AI Engineer: Take-Home Assessment
+# PantryPal 🍳
 
-**Role:** Applied AI Engineer (Full-Stack)
-**Time:** 3 hours, self-timeboxed
-**Submission:** Public GitHub repo, or private repo shared with @elmdecoste and @bgreal5
+> The friend who actually cooks. A conversational AI cooking assistant for that 6pm "what do I even make" moment.
 
----
+PantryPal answers cooking questions, suggests recipes from a 1,000+ recipe library, figures out what you can make with the gear you actually own, and remembers your tastes across sessions — with personality, and with safety guardrails baked in.
 
-## Before you start
+**Stack:** FastAPI · LangGraph · LangChain · Anthropic (Claude) · Tavily (web search) · vanilla-JS chat UI · Docker.
 
-Your 3-hour window starts when the assessment zip is delivered. The delivery system tracks the clock automatically, so there's no need to mark a start time yourself.
-
-The time box is intentionally tight. Part of what we're evaluating is what you choose to build and what you choose to defer.
-
-How to work:
-
-1. Read the artifacts in `/brief/` and decide what to build.
-2. Commit as you go so we can see your progress.
-3. At the 3-hour mark, stop. If you commit past that point, note them as post-window in your writeup. We'd rather see honesty than a silent overrun.
-
-If something goes wrong (life, illness, internet), just tell us. Rescheduling is fine; silent extensions are not.
+See [SCOPING.md](SCOPING.md) for what we committed to and why, and [TRADEOFFS.md](TRADEOFFS.md) for what got cut.
 
 ---
 
-## What you're building
+## Quick start (Docker — recommended)
 
-PantryPal is an early-stage B2C startup building an AI-powered cooking assistant. They've engaged us to build the first working version of their core product: a conversational assistant that helps users figure out what to cook.
+```bash
+# 1. Add your keys
+cp .env.example .env        # then paste your ANTHROPIC_API_KEY and TAVILY_API_KEY
 
-Instead of a clean spec, we've included the actual messages and artifacts we received from the PantryPal team during discovery. You'll find them in `/brief/`:
+# 2. Build + run
+docker compose up --build
 
-- An email from their Head of Product
-- A voice-memo transcript from the CEO
-- A message from their Head of Customer Experience
-- A late-breaking email from their legal counsel
+# 3. Open the chat
+open http://localhost:8000
+```
 
-Your first job is to read these carefully and decide what to build.
+That's it — one container serves both the API and the chat UI. Per-user memory persists in a Docker volume (`pantrypal_data`).
 
----
+## Quick start (local Python, no Docker)
 
-## Deliverables
+```bash
+cd backend
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
 
-You will submit four things:
+# keys are read from ../.env automatically
+uvicorn app.main:app --reload --port 8000
+# open http://localhost:8000
+```
 
-### 1. A scoping document (`SCOPING.md` in the repo root)
-
-Before writing code, produce a short scoping doc with the following sections:
-
-- **Scope committed:** what you're actually building, as a tight list
-- **Scope cut:** what you heard but decided not to do, with reasoning
-- **Contradictions resolved:** where stakeholders disagreed, and how you decided
-- **Clarifying questions:** what you'd want answered before a production build
-- **Assumptions made:** what you decided without asking
-- **Risks accepted:** what could bite later and why you're accepting it
-
-Keep this to 1-2 pages. We care about what's in each bucket. A scoping doc with three sharp, defensible entries per section beats one with fifteen generic ones.
-
-### 2. A working system
-
-Build against your own scope. Baseline requirements (non-negotiable):
-
-- A Python backend using **FastAPI** and **LangGraph**
-- LLM-driven tool use: the model decides when to invoke tools (no hardcoded sequences)
-- At least one external tool (web search or equivalent)
-- All LLM calls routed through **LangChain** (no model-specific SDKs directly)
-- A chat frontend (stack of your choice; we recommend something you're fast in)
-- Docker setup, so we can clone and run
-
-Everything else is up to you. Implement what your scope says you'll implement.
-
-### 3. A README
-
-Setup instructions, example requests (curl is fine), and anything a teammate would need to run and understand the code.
-
-### 4. A trade-offs writeup (`TRADEOFFS.md` in the repo root)
-
-Short doc covering:
-
-- What you actually built vs. what you scoped (time pressure is expected; tell us what got cut)
-- Specific trade-offs you made and why
-- What you'd do next with more time
-- Known issues or unhandled cases
+Requires Python 3.12+.
 
 ---
 
-## Expectations and norms
+## Configuration
 
-- **Use AI tools.** We do, and we expect you to. We're evaluating your judgment and your output.
-- **Don't optimize for feature count.** A smaller working system with defensible choices beats a larger system built on unexamined assumptions.
-- **Ship something that runs.** If you have to cut, cut scope before quality.
-- **Document unfinished work.** Stubs with clear TODOs are fine. Leave a clear trail of what's unfinished.
-- **Expect robustness to be tested.** We'll exercise your system with inputs you didn't design for. Build accordingly.
+All config is environment-driven (see [.env.example](.env.example)):
+
+| Variable | Required | Default | Purpose |
+|---|---|---|---|
+| `ANTHROPIC_API_KEY` | ✅ | — | LLM calls (via LangChain) |
+| `TAVILY_API_KEY` | for web search | — | external web-search tool; app still runs without it |
+| `PANTRYPAL_FAST_MODEL` | | `claude-haiku-4-5` | cheap/fast model for simple turns |
+| `PANTRYPAL_SMART_MODEL` | | `claude-sonnet-4-6` | stronger model for recipe reasoning |
+| `PANTRYPAL_MAX_TOKENS` | | `1024` | max response tokens |
 
 ---
 
-## A note on the brief
+## How it works
 
-The PantryPal artifacts are what you'd actually receive from a client at this stage: incomplete, sometimes contradictory, with real constraints buried in asides. Reading them carefully is part of the work. Do not assume every stated requirement belongs in your build, and do not assume every omission is unimportant.
+```
+user ─▶ /api/chat (SSE stream)
+          │
+          ├─ load_memory   read equipment + food prefs from SQLite
+          ├─ route         a cheap classifier picks fast vs smart model  ← cost control
+          ├─ agent ⇄ tools LLM decides which tools to call (no hardcoded sequence)
+          │                 • search_recipes  (local 1,042-recipe library)
+          │                 • check_can_make  (your equipment vs. what a recipe needs)
+          │                 • web_search      (Tavily — the external tool)
+          └─ extract_memory pull durable food prefs (never health data) → SQLite
+```
 
-Good luck.
+- **All LLM calls go through LangChain** (`ChatAnthropic`) — no Anthropic SDK used directly.
+- **Tool use is model-driven** — the LangGraph ReAct loop lets Claude decide when to search, when to check equipment, and when to hit the web.
+- **Equipment-aware:** `check_can_make` compares a recipe's needs against the user's *stored* kit (not a guessed default list). If something's missing, the assistant is prompted to offer a workaround or an alternative, never a flat "you can't."
+- **Compliance is structural, not vibes:** the allergen disclaimer is attached **deterministically in code** whenever a recipe/ingredient is suggested; medical-condition and food-safety questions are deflected by hard rules in the system prompt.
+
+---
+
+## API
+
+### `POST /api/chat` — streaming chat (Server-Sent Events)
+
+```bash
+curl -N http://localhost:8000/api/chat \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "user_id": "demo",
+    "messages": [{"role": "user", "content": "something spicy and fast for dinner"}]
+  }'
+```
+
+Streams `data:` events of type `model`, `tool`, `token`, `disclaimer`, `done`, `error`.
+Send the full `messages` array each turn to preserve conversation context; cross-session
+preferences are recalled automatically from `user_id`.
+
+### `GET /api/memory/{user_id}` — inspect stored memory
+### `DELETE /api/memory/{user_id}` — right-to-delete (wipe everything for a user)
+### `GET /api/health` — status + which keys/models are configured
+
+---
+
+## Try these (they exercise the interesting paths)
+
+| Ask | What it shows |
+|---|---|
+| `something spicy and fast for dinner` | recipe search + speed filter + opinionated pick |
+| `I only have a hot plate and one pan. What can I make?` | equipment-aware filtering + workaround pivot |
+| `what can I substitute for buttermilk?` | Tavily web search |
+| `I'm vegetarian and I love Thai food` then later `what's for dinner?` | cross-session memory |
+| `I left chicken out overnight, is it safe?` | food-safety deferral (won't judge) |
+| `I'm diabetic, what should I eat?` | acknowledges generically, no medical advice, not stored |
+| `write my cover letter` | warm off-topic redirect |
+
+---
+
+## Project layout
+
+```
+backend/
+  app/
+    main.py      FastAPI app: /api/chat (SSE) + memory endpoints + static UI
+    agent.py     LangGraph graph, model routing, memory extraction
+    tools.py     search_recipes, check_can_make, web_search (Tavily)
+    recipes.py   loads recipes.json (JSON or JSON-lines) + keyword search
+    memory.py    SQLite store for equipment + food preferences
+    prompts.py   PantryPal voice + compliance rules + helper prompts
+    config.py    env-driven configuration
+  requirements.txt
+  Dockerfile
+frontend/        index.html + styles.css + app.js (vanilla, streaming)
+assets/recipes.json   the recipe library (ships with the repo)
+docker-compose.yml
+```

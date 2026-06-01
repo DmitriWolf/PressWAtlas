@@ -1,0 +1,30 @@
+# Secrets / local config
+.env
+.env.local
+*.local
+
+# Local SQLite memory store
+*.db
+backend/*.db
+backend/app/*.db
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node / frontend (if a build step is added later)
+node_modules/
+dist/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
