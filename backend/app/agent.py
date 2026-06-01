@@ -12,6 +12,7 @@ Flow per request (orchestrated from main.py):
 """
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from typing import Annotated, TypedDict
 
@@ -35,6 +36,7 @@ from .prompts import (
     drop_health_terms,
     safe_parse_memory,
 )
+from .recipes import infer_equipment, unmet_equipment
 from .tools import ALL_TOOLS, current_equipment
 
 RECIPE_TOOLS = {"search_recipes", "check_can_make"}
@@ -115,6 +117,79 @@ def prepare(user_id: str, history: list[dict]) -> tuple[list[BaseMessage], str]:
 
     model_choice = classify_turn(last_user) if last_user else config.SMART_MODEL
     return messages, model_choice
+
+
+_NAME_STOP = {"with", "and", "the", "of", "or", "for", "aka", "style", "easy", "best"}
+
+
+def _named_recipe(results: list[dict], answer_low: str) -> dict | None:
+    """Find which searched recipe the answer actually recommends.
+
+    The model often shortens names ("...Pork Tenderloin" for "...Pork Tenderloin
+    with Preserves"), so we match on token overlap rather than exact substring.
+    """
+    best, best_score = None, 0.0
+    for r in results:
+        name = (r.get("name") or "")
+        toks = {w for w in re.findall(r"[a-z]+", name.lower()) if len(w) > 2 and w not in _NAME_STOP}
+        if len(toks) < 2:  # too short to score reliably -> require exact mention
+            if name and name.lower() in answer_low:
+                return r
+            continue
+        score = sum(1 for w in toks if w in answer_low) / len(toks)
+        if score > best_score:
+            best, best_score = r, score
+    return best if best_score >= 0.6 else None
+
+
+def _humanize(items: list[str]) -> str:
+    if len(items) == 1:
+        return items[0]
+    if len(items) == 2:
+        return f"{items[0]} and {items[1]}"
+    return f"{', '.join(items[:-1])}, and {items[-1]}"
+
+
+# Phrases that indicate the model already asked about gear itself — don't double up.
+_ALREADY_ASKED = ("do you have", "what do you have", "what are you working with",
+                  "got a ", "got an ", "equipment", "what's in your kitchen")
+
+
+def build_equipment_nudge(
+    search_results: list[dict], answer: str, owned: list[str], check_called: bool
+) -> str | None:
+    """Deterministic backstop (polish P1): if the model recommended a recipe but
+    skipped `check_can_make`, append a 'do you have the gear?' prompt so Priya's
+    "it HAS to check" holds even when the model forgets. Returns None when no
+    nudge is warranted (check ran, no recipe named, or model already asked).
+    """
+    if check_called or not search_results:
+        return None
+    low = answer.lower()
+    if any(p in low for p in _ALREADY_ASKED):
+        return None
+    matched = _named_recipe(search_results, low)
+    if not matched:
+        return None
+    name = matched["name"]
+    needs = infer_equipment(matched)
+    if not needs:  # nothing inferable -> graceful generic ask
+        return (
+            f"\n\n— **Quick gear check:** before you commit to {name}, do you have the "
+            f"equipment it needs? Tell me what's in your kitchen and I'll confirm or suggest a swap."
+        )
+    unmet = unmet_equipment(needs, owned)
+    if owned and not unmet:
+        return (
+            f"\n\n— **Quick gear check:** {name} usually needs {_humanize(needs)} — "
+            f"looks like you're set, but give it a glance before you start."
+        )
+    gear = unmet or needs
+    pronoun = "that" if len(gear) == 1 else "those"
+    return (
+        f"\n\n— **Quick gear check:** {name} usually needs {_humanize(gear)}. "
+        f"Do you have {pronoun}? If not, tell me your setup and I'll find something that fits."
+    )
 
 
 def turn_suggested_food(messages: list[BaseMessage]) -> bool:

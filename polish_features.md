@@ -9,25 +9,38 @@ quality/cost win · **P3** = nice-to-have / future.
 
 ---
 
-## P1 — Enforce the equipment check (Priya, non-negotiable)
+## P1 — Enforce the equipment check (Priya, non-negotiable) — ✅ IMPLEMENTED
 
 **Brief:** Priya — *"It **has to** check whether the user can actually make what it
-suggests."* Today `check_can_make` is model-driven: the system prompt says "ALWAYS
-call it," but nothing guarantees it. A robustness test will find the turn where the
+suggests."* `check_can_make` is model-driven: the system prompt says "ALWAYS call
+it," but nothing guaranteed it, so a robustness test could find the turn where the
 model recommends a recipe and skips the check.
 
-**Proposed approach:**
-- After the agent finishes, detect whether a concrete recipe was recommended (a
-  `search_recipes` result name appears in the final answer) **without** a
-  corresponding `check_can_make` call.
-- If so, either (a) re-enter the graph once to force the equipment check, or
-  (b) append a deterministic "Do you have [inferred gear]? Here's the swap if not"
-  nudge. Option (b) is cheaper and never blocks the answer.
-- Alternatively, model the loop so a recipe recommendation *must* pass through a
-  `check_can_make` node before it can reach the user (structural guarantee).
+**Implemented (option (b), keyword-heuristic variant):**
+- After the agent finishes, the stream detects whether a searched recipe was
+  actually recommended (token-overlap match of a `search_recipes` result name in
+  the final answer) **without** a `check_can_make` call.
+- If so, it deterministically appends a "Quick gear check" prompt:
+  `infer_equipment()` (in `recipes.py`) guesses the likely gear from the recipe's
+  name/description/ingredients via keywords; `unmet_equipment()` filters it against
+  the user's stored kit so we only ask about gear we're unsure of; if nothing is
+  inferable it falls back to a generic ask. Framed as a question, never an
+  assertion, and it never blocks the streamed answer.
+- Guards: skipped entirely when `check_can_make` ran (happy path) or when the model
+  already asked about gear itself (`_ALREADY_ASKED`), so it never double-asks.
 
-**Effort:** ~M. Touches `agent.py` (graph topology or post-step) + `main.py`.
-**Risk:** option (a) adds latency on the affected turns; option (b) is safe.
+**Files:** `recipes.py` (`infer_equipment`, `unmet_equipment`), `agent.py`
+(`build_equipment_nudge`, `_named_recipe`), `main.py` (capture search results +
+`check_called`, append nudge before the disclaimer).
+
+**Verified:** unit-tested all branches (shortened-name match, owned/unowned/unknown
+equipment, no false positives) and exercised against live search results. In live
+runs the model almost always calls the check or asks itself, so the backstop stays
+silent — exactly the intended safety-net behavior.
+
+> Not done (deferred): the stronger *structural* guarantee (a graph topology where a
+> recommendation must pass through a `check_can_make` node). The post-step backstop
+> covers the requirement at much lower cost/latency.
 
 ---
 
@@ -127,7 +140,7 @@ with the legal work already done; raises robustness against adversarial extracti
 
 ## Suggested order
 
-1. **P1 equipment-check enforcement** — closes the remaining stated-requirement gap.
+1. ~~**P1 equipment-check enforcement**~~ — ✅ done (closed the stated-requirement gap).
 2. **P2 cost/latency** — directly serves Priya's economics ask, low effort.
 3. **P2 AI-tells** — quick, visible polish.
 4. **P3** favorites → onboarding → retrieval → compliance classifier, as time allows.
