@@ -35,6 +35,12 @@ MAX_TOKENS = int(os.getenv("PANTRYPAL_MAX_TOKENS", "1024"))
 TAVILY_MAX_RESULTS = int(os.getenv("TAVILY_MAX_RESULTS", "3"))
 RECIPE_SEARCH_LIMIT = int(os.getenv("RECIPE_SEARCH_LIMIT", "5"))
 
+# --- Compliance (Diane / legal) --------------------------------------------
+# Stored food preferences are auto-purged after this window (retention story).
+RETENTION_DAYS = int(os.getenv("PANTRYPAL_RETENTION_DAYS", "180"))
+# Stated minimum age. The product is not directed at children; see SYSTEM_PROMPT.
+MIN_AGE = int(os.getenv("PANTRYPAL_MIN_AGE", "13"))
+
 
 def require_anthropic_key() -> str:
     if not ANTHROPIC_API_KEY:

@@ -19,14 +19,23 @@ from pydantic import BaseModel, Field  # noqa: E402
 
 from . import config, memory  # noqa: E402
 from .agent import (  # noqa: E402
-    RECIPE_TOOLS,
+    SUGGESTION_TOOLS,
     build_graph,
     extract_and_save,
     prepare,
 )
-from .prompts import ALLERGEN_DISCLAIMER  # noqa: E402
+from .prompts import ALLERGEN_DISCLAIMER, STANDING_NOTICE  # noqa: E402
 
 app = FastAPI(title="PantryPal", version="1.0")
+
+
+@app.on_event("startup")
+def _enforce_retention() -> None:
+    """Apply the data-retention policy on boot (Diane's retention requirement)."""
+    try:
+        memory.purge_stale(config.RETENTION_DAYS)
+    except Exception:
+        pass
 
 TOOL_LABELS = {
     "search_recipes": "🔎 searching the recipe library…",
@@ -67,10 +76,12 @@ async def chat(req: ChatRequest):
     graph = build_graph()
 
     async def stream():
-        recipe_used = False
+        suggested_food = False
         final_text_parts: list[str] = []
         announced: set[str] = set()
         yield _sse("model", model=model_choice)
+        # Always-visible standing disclosure (consistency = compliance).
+        yield _sse("notice", text=STANDING_NOTICE)
         try:
             async for mode, payload in graph.astream(
                 {"messages": messages, "model_choice": model_choice},
@@ -88,8 +99,8 @@ async def chat(req: ChatRequest):
                         for m in update.get("messages", []):
                             for tc in getattr(m, "tool_calls", None) or []:
                                 name = tc.get("name")
-                                if name in RECIPE_TOOLS:
-                                    recipe_used = True
+                                if name in SUGGESTION_TOOLS:
+                                    suggested_food = True
                                 if name and name not in announced:
                                     announced.add(name)
                                     yield _sse("tool", label=TOOL_LABELS.get(name, f"using {name}…"))
@@ -97,8 +108,9 @@ async def chat(req: ChatRequest):
             yield _sse("error", message=f"Something went wrong: {e}")
             return
 
-        # Deterministic, consistent allergen notice (Diane's non-negotiable).
-        if recipe_used:
+        # Contextual allergen notice when a recipe/ingredient was suggested
+        # (reinforces the always-on standing notice above). Diane's non-negotiable.
+        if suggested_food:
             yield _sse("disclaimer", text=ALLERGEN_DISCLAIMER)
         yield _sse("done")
 
