@@ -10,6 +10,10 @@ See [SCOPING.md](SCOPING.md) for what we committed to and why, and [TRADEOFFS.md
 
 ---
 
+https://github.com/user-attachments/assets/157cccce-5037-41d6-b70b-74e7aff28701
+
+---
+
 ## Quick start (Docker — recommended)
 
 ```bash
